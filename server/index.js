@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 // const { Chess } = require('chess.js'); // Optional: Backend validation
-const wordList = require('./words');
+const wordList = require('./words'); // Ensure you have a words.js file with an array of strings
 
 const app = express();
 app.use(cors());
@@ -16,14 +16,21 @@ const io = new Server(server, {
 const rooms = {}; 
 
 // --- HELPER FUNCTIONS ---
-function getRandomWords(count) {
-    // If words.js is missing or empty, use fallback
-    const list = (wordList && wordList.length > 0) ? wordList : ["Apple", "Banana", "Cat", "Dog", "Sun"];
+function getRandomWords(count, difficulty) {
+    // Fallback list
+    let list = (wordList && wordList.length > 0) ? wordList : ["Apple", "Banana", "Cat", "Dog", "Sun", "Tree", "Computer", "Phone", "Glasses"];
+    
+    // Filter by difficulty if requested
+    if (difficulty === 'hard') {
+        list = list.filter(w => w.length > 5);
+    } else if (difficulty === 'easy') {
+        list = list.filter(w => w.length <= 5);
+    }
+
     const shuffled = list.sort(() => 0.5 - Math.random());
     return shuffled.slice(0, count);
 }
 
-// Levenshtein Distance for "Close Guess"
 function isCloseGuess(guess, actual) {
     if (!guess || !actual) return false;
     const s = guess.toLowerCase();
@@ -33,7 +40,6 @@ function isCloseGuess(guess, actual) {
     return false;
 }
 
-// Tic-Tac-Toe Win Logic
 function checkTicTacToeWin(board) {
     const lines = [
         [0, 1, 2], [3, 4, 5], [6, 7, 8], 
@@ -49,7 +55,12 @@ function checkTicTacToeWin(board) {
 
 io.on('connection', (socket) => {
     
-    // 1. CREATE ROOM
+    // 1. CHECK ROOM EXISTENCE (For Invite Link)
+    socket.on('check_room', (roomCode, callback) => {
+        callback(!!rooms[roomCode]);
+    });
+
+    // 2. CREATE ROOM
     socket.on('create_room', ({ username, avatar, roomName, gameType, settings }) => {
         const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
         
@@ -58,6 +69,8 @@ io.on('connection', (socket) => {
         if (gameType === 'scribble') {
             initialGameData = {
                 roundTime: parseInt(settings?.time) || 60,
+                totalRounds: parseInt(settings?.rounds) || 3,
+                difficulty: settings?.difficulty || 'mixed',
                 currentRound: 1,
                 drawerIndex: 0,
                 currentDrawerId: null,
@@ -83,12 +96,16 @@ io.on('connection', (socket) => {
         socket.emit('room_created', roomCode);
     });
 
-    // 2. JOIN ROOM
-    socket.on('join_room', ({ roomCode, username, avatar, gender }) => {
+    // 3. JOIN ROOM
+    socket.on('join_room', ({ roomCode, username, avatar }) => {
         const room = rooms[roomCode];
-        if (!room) { socket.emit('error', 'Room not found'); return; }
+        
+        if (!room) { 
+            socket.emit('error', 'ROOM_NOT_FOUND'); 
+            return; 
+        }
 
-        const user = { id: socket.id, username, avatar, gender, score: 0 };
+        const user = { id: socket.id, username, avatar, score: 0 };
         room.users.push(user);
         socket.join(roomCode);
 
@@ -108,13 +125,15 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room || room.gameType !== 'tictactoe') return;
 
+        // Turn logic: 0 = X, 1 = O. Based on user array index.
+        // If more than 2 users, only first 2 play.
         const turnPlayerIndex = room.gameData.turn % 2;
-        // Ensure we have enough players
         if (room.users.length < 2) return; 
         
+        // Ensure the person clicking is the person whose turn it is
         const turnPlayer = room.users[turnPlayerIndex];
-        
-        if (turnPlayer.id !== socket.id) return; // Not your turn
+        if (turnPlayer.id !== socket.id) return; 
+
         if (room.gameData.board[index]) return; // Cell taken
 
         // Update Board
@@ -126,7 +145,6 @@ io.on('connection', (socket) => {
         
         if (winnerSymbol) {
             io.to(roomCode).emit('ttt_update', { board: room.gameData.board, turn: room.gameData.turn });
-            
             let winMsg = (winnerSymbol === 'draw') ? "It's a Draw!" : `${turnPlayer.username} Won!`;
             io.to(roomCode).emit('system_message', winMsg);
             
@@ -156,22 +174,37 @@ io.on('connection', (socket) => {
     function startScribbleRound(roomCode) {
         const room = rooms[roomCode];
         // Game Over Check
-        if (room.gameData.currentRound > 3) {
+        if (room.gameData.currentRound > room.gameData.totalRounds) {
             const leaderboard = [...room.users].sort((a, b) => b.score - a.score);
             io.to(roomCode).emit('scribble_game_over', leaderboard);
             room.state = "LOBBY";
             return;
         }
 
+        // Ensure drawer index wraps correctly
+        if (room.gameData.drawerIndex >= room.users.length) {
+            room.gameData.drawerIndex = 0;
+            room.gameData.currentRound++;
+            // Re-check rounds after increment
+             if (room.gameData.currentRound > room.gameData.totalRounds) {
+                const leaderboard = [...room.users].sort((a, b) => b.score - a.score);
+                io.to(roomCode).emit('scribble_game_over', leaderboard);
+                room.state = "LOBBY";
+                return;
+            }
+        }
+
         const drawer = room.users[room.gameData.drawerIndex];
         room.gameData.currentDrawerId = drawer.id;
         room.gameData.currentWord = null;
 
-        const options = getRandomWords(3);
+        // Get words based on difficulty setting
+        const options = getRandomWords(3, room.gameData.difficulty);
 
         io.to(roomCode).emit('scribble_turn_waiting', { 
             drawer: drawer.username, 
-            round: room.gameData.currentRound 
+            round: room.gameData.currentRound,
+            totalRounds: room.gameData.totalRounds
         });
         io.to(drawer.id).emit('scribble_choose_word', options);
     }
@@ -208,15 +241,19 @@ io.on('connection', (socket) => {
     function nextDrawer(roomCode) {
         const room = rooms[roomCode];
         room.gameData.drawerIndex++;
-        if (room.gameData.drawerIndex >= room.users.length) {
-            room.gameData.drawerIndex = 0;
-            room.gameData.currentRound++;
-        }
+        // Rounds logic is handled at start of startScribbleRound
         startScribbleRound(roomCode);
     }
 
     // --- DRAWING & CHESS RELAY ---
-    socket.on('draw_data', (d) => socket.to(d.roomCode).emit('draw_data', d));
+    socket.on('draw_data', (d) => {
+        // Only allow drawing if sender is the current drawer
+        const room = rooms[d.roomCode];
+        if(room && room.gameData.currentDrawerId === socket.id) {
+            socket.to(d.roomCode).emit('draw_data', d);
+        }
+    });
+    
     socket.on('chess_move', (d) => socket.to(d.roomCode).emit('chess_move', d.move));
 
     // --- CHAT & GUESSING ---
@@ -258,14 +295,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        // Simple disconnect cleanup
         for (const code in rooms) {
             const room = rooms[code];
             const idx = room.users.findIndex(u => u.id === socket.id);
             if (idx !== -1) {
                 room.users.splice(idx, 1);
                 if (room.users.length === 0) delete rooms[code];
-                else io.to(code).emit('update_room', { ...room }); // basic update
+                else io.to(code).emit('update_room', { ...room });
                 break;
             }
         }
