@@ -173,9 +173,11 @@ io.on('connection', (socket) => {
         }, 1000);
     });
 
-    socket.on('draw_data', ({ roomCode, data }) => {
-        socket.to(roomCode).emit('draw_data', data); // Broadcast drawing to others
-    });
+    socket.on('draw_data', (payload) => {
+    // payload contains: { roomCode, x, y, color, ... }
+    // We send this exact payload to everyone else in the room
+    socket.to(payload.roomCode).emit('draw_data', payload);
+});
 
     socket.on('chat_message', ({ roomCode, message }) => {
         const room = rooms[roomCode];
