@@ -90,7 +90,7 @@ function startScribbleTurn(roomCode) {
     if (room.gameData.drawerIdx >= room.users.length) {
         room.gameData.drawerIdx = 0;
         room.gameData.round++;
-        startScribbleTurn(roomCode); // Recursively start next round
+        startScribbleTurn(roomCode); 
         return;
     }
 
@@ -98,19 +98,19 @@ function startScribbleTurn(roomCode) {
     room.gameData.drawerId = drawer.id;
     room.gameData.word = null;
     room.gameData.guessed = [];
-    room.gameData.history = []; // Clear canvas history
+    room.gameData.history = []; 
     room.gameData.redoStack = []; 
     
     // 3. Notify All -> Clear Canvas
     io.to(roomCode).emit('clear_canvas'); 
     
-    // Update State to SELECTING
+    // Update State
     room.state = "SELECTING";
     io.to(roomCode).emit('scribble_state', { 
         state: "SELECTING", 
         drawerId: drawer.id, 
         drawerName: drawer.username,
-        drawerAvatar: drawer.avatar, // Added Avatar for picking UI
+        drawerAvatar: drawer.avatar, 
         round: room.gameData.round,
         totalRounds: room.settings.rounds
     });
@@ -122,8 +122,6 @@ function startScribbleTurn(roomCode) {
     // 5. Pick Timer (30s)
     let pickTime = 30;
     clearInterval(room.gameData.timer);
-    
-    // Emit initial time
     io.to(roomCode).emit('pick_timer', pickTime);
 
     room.gameData.timer = setInterval(() => {
@@ -143,7 +141,7 @@ function handleWordSelection(roomCode, word) {
     room.gameData.word = word;
     room.state = "DRAWING";
     
-    // Mask word (e.g., "Apple" -> "_ _ _ _ _")
+    // Mask word
     const masked = word.replace(/[a-zA-Z]/g, '_');
     
     io.to(roomCode).emit('scribble_state', {
@@ -181,7 +179,6 @@ function endTurn(roomCode, reason) {
     const room = rooms[roomCode];
     clearInterval(room.gameData.timer);
     
-    // Prepare Leaderboard Data
     const lb = room.users.map(u => ({
         username: u.username,
         avatar: u.avatar,
@@ -195,7 +192,6 @@ function endTurn(roomCode, reason) {
         leaderboard: lb
     });
 
-    // 5 Second cooldown before next turn
     setTimeout(() => {
         room.gameData.drawerIdx++;
         startScribbleTurn(roomCode);
@@ -207,21 +203,12 @@ io.on('connection', (socket) => {
     
     socket.on('create_room', ({ username, avatar, gameType, settings }) => {
         const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-        
-        const rSettings = {
-            rounds: 3,
-            time: 60,
-            customWords: []
-        };
+        const rSettings = { rounds: 3, time: 60, customWords: [] };
 
         let gd = {};
-        if(gameType === 'scribble') {
-            gd = { round: 1, drawerIdx: 0, drawerId: null, word: null, history: [], redoStack: [], guessed: [] };
-        } else if (gameType === 'tictactoe') {
-            gd = { board: Array(9).fill(null), turn: 'X' };
-        } else if (gameType === 'chess' && Chess) {
-            gd = { fen: new Chess().fen() };
-        }
+        if(gameType === 'scribble') gd = { round: 1, drawerIdx: 0, drawerId: null, word: null, history: [], redoStack: [], guessed: [] };
+        else if (gameType === 'tictactoe') gd = { board: Array(9).fill(null), turn: 'X' };
+        else if (gameType === 'chess' && Chess) gd = { fen: new Chess().fen() };
 
         rooms[roomCode] = {
             name: `${username}'s Room`,
@@ -238,18 +225,15 @@ io.on('connection', (socket) => {
     socket.on('join_room', ({ roomCode, username, avatar }) => {
         const room = rooms[roomCode];
         if(!room) return socket.emit('error', "Room not found");
-        
         if(room.users.length >= 10) return socket.emit('error', "Room is full (Max 10)");
 
         const existing = room.users.find(u => u.id === socket.id);
         if(!existing) {
-            // Use provided avatar or generate
             const av = avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${username}`;
             room.users.push({ id: socket.id, username, avatar: av, score: 0 });
             socket.join(roomCode);
         }
 
-        // Notify
         io.to(roomCode).emit('update_room', getRoomState(room));
         io.to(roomCode).emit('sys_msg', `${username} joined.`);
         socket.emit('sfx', 'join');
@@ -303,7 +287,6 @@ io.on('connection', (socket) => {
         if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // Game Logic
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id !== room.gameData.drawerId) {
             const guess = text.trim().toLowerCase();
             const actual = room.gameData.word.toLowerCase();
@@ -330,7 +313,6 @@ io.on('connection', (socket) => {
             // Close Guess Logic
             if(actual.length > 2) {
                 const dist = getEditDistance(guess, actual);
-                // Allow error of 1 or 2 based on length
                 const threshold = actual.length > 5 ? 2 : 1;
                 if(dist <= threshold) {
                     socket.emit('sys_msg_close', `🔥 '${text}' is very close!`);
@@ -338,7 +320,6 @@ io.on('connection', (socket) => {
                 }
             }
         }
-
         io.to(roomCode).emit('chat_receive', { username: user.username, text, avatar: user.avatar });
         io.to(roomCode).emit('sfx', 'msg');
     });
@@ -361,8 +342,7 @@ io.on('connection', (socket) => {
     socket.on('undo', ({ roomCode }) => {
         const room = rooms[roomCode];
         if(room && room.gameData.history.length > 0) {
-            const last = room.gameData.history.pop();
-            room.gameData.redoStack.push(last);
+            room.gameData.redoStack.push(room.gameData.history.pop());
             io.to(roomCode).emit('canvas_history', room.gameData.history);
         }
     });
@@ -395,7 +375,6 @@ io.on('connection', (socket) => {
             if(idx !== -1) {
                 r.users.splice(idx, 1);
                 io.to(code).emit('sys_msg', "A player left.");
-                
                 if(r.users.length === 0) delete rooms[code];
                 else {
                     if(r.adminId === socket.id) {
