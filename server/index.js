@@ -84,16 +84,14 @@ function startScribbleRound(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Check End Game
     if (room.gameData.currentRound > parseInt(room.settings.rounds)) {
         endScribbleGame(roomCode);
         return;
     }
 
-    // Determine Drawer
     const drawer = room.users[room.gameData.drawerIndex];
+    // Safety check if drawer left
     if (!drawer) {
-        // Fallback if user left mid-game
         room.gameData.drawerIndex = 0;
         room.gameData.currentRound++;
         startScribbleRound(roomCode);
@@ -103,26 +101,25 @@ function startScribbleRound(roomCode) {
     room.gameData.currentDrawerId = drawer.id;
     room.state = "SELECTING_WORD";
     
-    // Reset Turn Data
+    // Reset Round Data
     room.gameData.drawHistory = [];
     room.gameData.guessedUsers = [];
     room.gameData.currentWord = null;
     
+    // 1. Broadcast State Update
     io.to(roomCode).emit('update_room', getRoomData(room));
     io.to(roomCode).emit('clear_canvas');
-    
-    // Notify EVERYONE about the state change
     io.to(roomCode).emit('scribble_state', { 
         state: 'SELECTING', 
         drawerId: drawer.id, 
         drawerName: drawer.username 
     });
 
+    // 2. Send Words to Drawer
     const words = getRandomWords(room.settings.complexity);
-    // Send words ONLY to the drawer
     io.to(drawer.id).emit('pick_word', { words, time: 30 });
 
-    // Selection Timer (30s)
+    // 3. Selection Timer (30s)
     let selectTime = 30;
     clearInterval(room.gameData.timer);
     room.gameData.timer = setInterval(() => {
@@ -145,7 +142,6 @@ function handleWordSelect(roomCode, word) {
 
     const drawTime = parseInt(room.settings.time);
     
-    // Notify Room
     io.to(roomCode).emit('scribble_state', {
         state: 'DRAWING',
         drawerId: room.gameData.currentDrawerId,
@@ -153,22 +149,22 @@ function handleWordSelect(roomCode, word) {
         time: drawTime
     });
 
-    // Send secret word to drawer
+    // Secret word for drawer
     io.to(room.gameData.currentDrawerId).emit('drawer_secret', { word });
 
-    // Game Timer
+    // Round Timer
     let timeLeft = drawTime;
     room.gameData.timer = setInterval(() => {
         timeLeft--;
         io.to(roomCode).emit('timer_tick', timeLeft);
 
-        // Auto Hints
+        // Hints Logic
         if ((timeLeft === Math.floor(drawTime * 0.75) || timeLeft === Math.floor(drawTime * 0.4))) {
              revealHint(roomCode);
         }
 
         if (timeLeft <= 0) {
-            // Negative scoring check
+            // Negative Score Logic
             if (room.settings.scoringMode === 'negative' && room.gameData.guessedUsers.length === 0) {
                  const drawer = room.users.find(u => u.id === room.gameData.currentDrawerId);
                  if(drawer) drawer.score = Math.max(0, drawer.score - 50);
@@ -204,16 +200,14 @@ function endScribbleTurn(roomCode, reason) {
         scores: room.users
     });
 
-    // Intermission 10s
-    let wait = 10;
+    // Intermission
+    let wait = 8;
     room.state = "INTERMISSION";
     const intTimer = setInterval(() => {
         wait--;
         if (wait <= 0) {
             clearInterval(intTimer);
             room.gameData.drawerIndex++;
-            
-            // Loop back to first player if all have drawn, increment round
             if (room.gameData.drawerIndex >= room.users.length) {
                 room.gameData.drawerIndex = 0;
                 room.gameData.currentRound++;
@@ -265,7 +259,7 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('update_room', getRoomData(room));
         io.to(roomCode).emit('system_message', { text: `${username} joined!`, type: 'sys' });
         
-        // Late Joiner Sync
+        // Late Joiner Sync - Send current canvas state immediately
         if (room.gameType === 'scribble' && room.state === 'PLAYING') {
             socket.emit('canvas_history', room.gameData.drawHistory);
             socket.emit('scribble_state', {
@@ -289,19 +283,23 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- DRAWING ENGINE (Broadcasting Operations) ---
+    // --- DRAWING ENGINE (Op-based) ---
     socket.on('draw_op', (data) => {
         const room = rooms[data.roomCode];
         if (!room) return;
 
         if (data.op === 'start') {
+            // New stroke
             room.gameData.currentStroke = { color: data.color, width: data.width, points: [{x: data.x, y: data.y}] };
         } else if (data.op === 'move' && room.gameData.currentStroke) {
+            // Add to current stroke
             room.gameData.currentStroke.points.push({x: data.x, y: data.y});
         } else if (data.op === 'end' && room.gameData.currentStroke) {
+            // Save stroke to history
             room.gameData.drawHistory.push(room.gameData.currentStroke);
             room.gameData.currentStroke = null;
         }
+        // Broadcast to everyone else
         socket.to(data.roomCode).emit('draw_op', data);
     });
 
@@ -324,18 +322,19 @@ io.on('connection', (socket) => {
     socket.on('word_select', ({ roomCode, word }) => handleWordSelect(roomCode, word));
 
     // --- CHAT & SCORING ---
-    socket.on('chat_message', ({ roomCode, message }) => {
+    socket.on('chat_message', ({ roomCode, msg }) => {
         const room = rooms[roomCode];
         if (!room) return;
         const user = room.users.find(u => u.id === socket.id);
         if (!user) return;
 
-        // Scribble Logic
+        // Scribble Guess Logic
         if (room.gameType === 'scribble' && room.state === 'PLAYING') {
             if (socket.id === room.gameData.currentDrawerId) return; // Drawer can't guess
-            if (message.trim().toLowerCase() === room.gameData.currentWord.toLowerCase()) {
+            
+            if (msg.trim().toLowerCase() === room.gameData.currentWord.toLowerCase()) {
                 if (!room.gameData.guessedUsers.includes(socket.id)) {
-                    // Score Calc
+                    // Score
                     const points = Math.max(50, 100 - (room.gameData.guessedUsers.length * 20));
                     user.score += points;
                     
@@ -349,27 +348,18 @@ io.on('connection', (socket) => {
                     if (room.gameData.guessedUsers.length >= room.users.length - 1) {
                         endScribbleTurn(roomCode, "Everyone Guessed!");
                     }
-                    return;
+                    return; // Don't show word in chat
                 }
             }
         }
-        io.to(roomCode).emit('chat_message', { username: user.username, avatar: user.avatar, text: message });
+        io.to(roomCode).emit('chat_message', { username: user.username, avatar: user.avatar, text: msg });
     });
 
-    // --- FEATURES (Emoji/Typing) ---
-    socket.on('send_reaction', ({ roomCode, emoji }) => {
-        io.to(roomCode).emit('show_reaction', { emoji });
-    });
+    socket.on('typing_start', ({ roomCode }) => socket.to(roomCode).emit('user_typing', { id: socket.id, typing: true }));
+    socket.on('typing_stop', ({ roomCode }) => socket.to(roomCode).emit('user_typing', { id: socket.id, typing: false }));
+    socket.on('send_reaction', ({ roomCode, emoji }) => io.to(roomCode).emit('show_reaction', { emoji }));
 
-    socket.on('typing_start', ({ roomCode }) => {
-        socket.to(roomCode).emit('user_typing', { id: socket.id, typing: true });
-    });
-    
-    socket.on('typing_stop', ({ roomCode }) => {
-        socket.to(roomCode).emit('user_typing', { id: socket.id, typing: false });
-    });
-
-    // --- OTHER GAMES ---
+    // Chess
     socket.on('chess_move', ({ roomCode, move }) => {
         const room = rooms[roomCode];
         if(room && Chess) {
@@ -381,6 +371,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // TTT
     socket.on('ttt_move', ({ roomCode, index }) => {
         const room = rooms[roomCode];
         if(room && room.gameType === 'tictactoe') {
