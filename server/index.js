@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// Robust Chess Import
+// Safe Chess Import
 let Chess;
 try {
     const chessLib = require('chess.js');
@@ -32,6 +32,7 @@ const WORDS = {
 
 function getRoomData(room) {
     let spectators = [];
+    // For non-scribble games, anyone after the 2nd player is a spectator
     if (room.gameType !== 'scribble' && room.users.length > 2) {
         spectators = room.users.slice(2);
     }
@@ -78,25 +79,6 @@ function checkTTTWin(board) {
     return null;
 }
 
-function makeBotMove(roomCode) {
-    const room = rooms[roomCode];
-    if (!room || room.gameType !== 'chess' || !Chess) return;
-
-    const game = new Chess(room.gameData.fen);
-    const moves = game.moves();
-    
-    if (moves.length > 0) {
-        const move = moves[Math.floor(Math.random() * moves.length)];
-        game.move(move);
-        room.gameData.fen = game.fen();
-        
-        setTimeout(() => {
-            io.to(roomCode).emit('chess_state', room.gameData.fen);
-            io.to(roomCode).emit('system_message', { text: "🤖 Bot made a move.", type: 'sys' });
-        }, 1000);
-    }
-}
-
 // --- GAME LOOPS ---
 
 function startScribbleRound(roomCode) {
@@ -110,7 +92,6 @@ function startScribbleRound(roomCode) {
 
     const drawer = room.users[room.gameData.drawerIndex];
     if (!drawer) {
-        // Fallback if user left
         room.gameData.drawerIndex = 0;
         room.gameData.currentRound++;
         startScribbleRound(roomCode);
@@ -120,7 +101,6 @@ function startScribbleRound(roomCode) {
     room.gameData.currentDrawerId = drawer.id;
     room.state = "SELECTING_WORD";
     
-    // Reset Data
     room.gameData.drawHistory = [];
     room.gameData.guessedUsers = [];
     room.gameData.currentWord = null;
@@ -135,15 +115,15 @@ function startScribbleRound(roomCode) {
     });
 
     const words = getRandomWords(room.settings.complexity);
-    io.to(drawer.id).emit('pick_word', { words, time: 30 });
+    io.to(drawer.id).emit('pick_word', { words, time: 20 });
 
-    let selectTime = 30;
+    let selectTime = 20;
     clearInterval(room.gameData.timer);
     room.gameData.timer = setInterval(() => {
         selectTime--;
         io.to(roomCode).emit('timer_tick', selectTime);
         if (selectTime <= 0) {
-            handleWordSelect(roomCode, words[0]); 
+            handleWordSelect(roomCode, words[0]); // Auto pick
         }
     }, 1000);
 }
@@ -179,7 +159,6 @@ function handleWordSelect(roomCode, word) {
         }
 
         if (timeLeft <= 0) {
-            // Negative Score
             if (room.settings.scoringMode === 'negative' && room.gameData.guessedUsers.length === 0) {
                  const drawer = room.users.find(u => u.id === room.gameData.currentDrawerId);
                  if(drawer) drawer.score = Math.max(0, drawer.score - 50);
@@ -266,13 +245,9 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return socket.emit('error', 'Room not found');
         
-        // Prevent duplicate joining
-        const existing = room.users.find(u => u.id === socket.id);
-        if (!existing) {
-            const user = { id: socket.id, username, avatar, score: 0 };
-            room.users.push(user);
-            socket.join(roomCode);
-        }
+        const user = { id: socket.id, username, avatar, score: 0 };
+        room.users.push(user);
+        socket.join(roomCode);
         
         io.to(roomCode).emit('update_room', getRoomData(room));
         io.to(roomCode).emit('system_message', { text: `${username} joined!`, type: 'sys' });
@@ -297,16 +272,11 @@ io.on('connection', (socket) => {
                 room.state = "PLAYING";
                 io.to(roomCode).emit('update_room', getRoomData(room));
                 io.to(roomCode).emit('system_message', { text: "Game Started!", type: 'sys' });
-                
-                // Bot Trigger
-                if(room.gameType === 'chess' && room.settings.useBot && room.users.length === 1) {
-                    // Logic handles response in chess_move
-                }
             }
         }
     });
 
-    // --- DRAWING ---
+    // --- DRAWING ENGINE ---
     socket.on('draw_op', (data) => {
         const room = rooms[data.roomCode];
         if (!room) return;
@@ -340,34 +310,38 @@ io.on('connection', (socket) => {
     socket.on('word_select', ({ roomCode, word }) => handleWordSelect(roomCode, word));
 
     // --- CHAT & SCORING ---
-    socket.on('chat_message', ({ roomCode, msg }) => {
+    socket.on('chat_message', ({ roomCode, message }) => {
         const room = rooms[roomCode];
         if (!room) return;
         const user = room.users.find(u => u.id === socket.id);
         if (!user) return;
 
+        // Check if message is a guess
         if (room.gameType === 'scribble' && room.state === 'PLAYING') {
-            if (socket.id === room.gameData.currentDrawerId) return; 
+            if (socket.id === room.gameData.currentDrawerId) return; // Drawer can't guess
             
-            if (msg.trim().toLowerCase() === room.gameData.currentWord.toLowerCase()) {
+            if (message.trim().toLowerCase() === room.gameData.currentWord.toLowerCase()) {
                 if (!room.gameData.guessedUsers.includes(socket.id)) {
+                    // Correct Guess
                     const points = Math.max(50, 100 - (room.gameData.guessedUsers.length * 20));
                     user.score += points;
+                    
                     const drawer = room.users.find(u => u.id === room.gameData.currentDrawerId);
                     if(drawer) drawer.score += 25; 
 
                     room.gameData.guessedUsers.push(socket.id);
-                    io.to(roomCode).emit('system_message', { text: `🎉 ${user.username} guessed it! (+${points})`, type: 'success' });
+                    io.to(roomCode).emit('system_message', { text: `🎉 ${user.username} guessed it!`, type: 'correct' });
                     io.to(roomCode).emit('update_room', getRoomData(room));
                     
                     if (room.gameData.guessedUsers.length >= room.users.length - 1) {
                         endScribbleTurn(roomCode, "Everyone Guessed!");
                     }
-                    return;
+                    return; // Don't broadcast word
                 }
             }
         }
-        io.to(roomCode).emit('chat_message', { username: user.username, avatar: user.avatar, text: msg });
+        // Broadcast standard message with 'text' property key
+        io.to(roomCode).emit('chat_message', { username: user.username, avatar: user.avatar, text: message });
     });
 
     socket.on('typing_start', ({ roomCode }) => socket.to(roomCode).emit('user_typing', { id: socket.id, typing: true }));
@@ -379,13 +353,12 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if(room && Chess) {
             const game = new Chess(room.gameData.fen);
-            if (game.move(move)) {
-                room.gameData.fen = game.fen();
-                io.to(roomCode).emit('chess_state', room.gameData.fen);
-                if(room.settings.useBot && room.users.length === 1) {
-                    setTimeout(() => makeBotMove(roomCode), 500);
+            try {
+                if (game.move(move)) {
+                    room.gameData.fen = game.fen();
+                    io.to(roomCode).emit('chess_state', room.gameData.fen);
                 }
-            }
+            } catch(e) {}
         }
     });
 
