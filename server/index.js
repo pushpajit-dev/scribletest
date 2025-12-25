@@ -12,7 +12,10 @@ try {
 const wordList = [
     "apple", "banana", "cherry", "dog", "cat", "elephant", "guitar", "house", "island", 
     "jungle", "kite", "lemon", "mountain", "notebook", "ocean", "penguin", "queen", 
-    "robot", "sun", "tree", "umbrella", "violin", "whale", "xylophone", "yacht", "zebra"
+    "robot", "sun", "tree", "umbrella", "violin", "whale", "xylophone", "yacht", "zebra",
+    "airplane", "book", "car", "dragon", "egg", "flower", "ghost", "hammer", "ice", 
+    "jacket", "key", "lamp", "moon", "nose", "owl", "pencil", "quilt", "rainbow", 
+    "snake", "train", "unicorn", "volcano", "watch", "box", "yo-yo", "zipper"
 ];
 
 const app = express();
@@ -127,7 +130,6 @@ function endChessGame(roomCode, winnerColor, reason) {
         const wid = room.gameData.players[winnerColor];
         const u = room.users.find(u => u.id === wid);
         if(u) {
-            // Points based on difficulty/time could go here
             u.score += 100; 
             winnerName = u.username;
         }
@@ -152,7 +154,6 @@ function endChessGame(roomCode, winnerColor, reason) {
 // --- TTT LOGIC ---
 function checkTTTWin(board, size) {
     const s = parseInt(size);
-    // Rows, Cols, Diags logic (compacted)
     const get = (r,c) => board[r*s+c];
     for(let i=0; i<s; i++) {
         if(get(i,0) && [...Array(s)].every((_,j)=>get(i,j)===get(i,0))) return get(i,0);
@@ -259,7 +260,7 @@ io.on('connection', (socket) => {
                 room.settings = { ...room.settings, ...settings };
                 room.settings.rounds = parseInt(settings.rounds);
                 room.settings.time = parseInt(settings.time);
-                room.settings.maxScore = parseInt(settings.maxScore); // Capture Max Score
+                room.settings.maxScore = parseInt(settings.maxScore); 
                 room.settings.gridSize = parseInt(settings.gridSize);
             }
 
@@ -308,7 +309,7 @@ io.on('connection', (socket) => {
         try {
             const m = c.move(move);
             if(m) {
-                // Time bonus scoring
+                // Scoring
                 const now = Date.now();
                 const diff = (now - room.gameData.lastMoveTime)/1000;
                 let pts = diff < 5 ? 10 : (diff < 10 ? 5 : 2);
@@ -389,7 +390,7 @@ io.on('connection', (socket) => {
         const r = rooms[d.roomCode]; if(!r) return;
         const u = r.users.find(x=>x.id===socket.id);
         if(r.gameType!=='scribble' && r.state==='PLAYING' && Object.values(r.gameData.players).includes(socket.id)) return; 
-        // Scribble guess check...
+        
         io.to(d.roomCode).emit('chat_receive', {username:u.username, text:d.text, avatar:u.avatar});
         io.to(d.roomCode).emit('sfx', 'msg');
     });
