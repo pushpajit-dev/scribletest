@@ -8,7 +8,7 @@ let Chess;
 try {
     const chessLib = require('chess.js');
     Chess = chessLib.Chess || chessLib;
-} catch (e) { console.log("Chess.js error: npm install chess.js"); }
+} catch (e) { console.log("Chess.js not found. Run: npm install chess.js"); }
 
 const wordList = [
     "apple", "banana", "cherry", "dog", "cat", "elephant", "guitar", "house", "island", 
@@ -30,9 +30,8 @@ const io = new Server(server, {
 const rooms = {}; 
 
 // --- HELPERS ---
-function getRandomWords(count, customWords = []) {
-    const pool = customWords.length > 0 ? customWords : wordList;
-    return pool.sort(() => 0.5 - Math.random()).slice(0, count);
+function getRandomWords(count) {
+    return wordList.sort(() => 0.5 - Math.random()).slice(0, count);
 }
 
 function getRoomState(room) {
@@ -43,18 +42,18 @@ function getRoomState(room) {
         gameType: room.gameType,
         state: room.state,
         settings: room.settings,
-        drawerId: room.gameData.drawerId, // Scribble only
+        drawerId: room.gameData.drawerId, // Scribble
         roundInfo: { 
             current: room.gameData.round, 
             total: room.settings.rounds 
         },
-        // Game Specifics
+        // Game Specific Data
         gameData: {
-            fen: room.gameData.fen,         
-            turn: room.gameData.turn,       
-            board: room.gameData.board,     
-            timers: room.gameData.timers,   
-            players: room.gameData.players  
+            fen: room.gameData.fen,         // Chess
+            turn: room.gameData.turn,       // Chess/TTT
+            board: room.gameData.board,     // TTT
+            timers: room.gameData.timers,   // Chess
+            players: room.gameData.players  // Chess (Who is White/Black)
         }
     };
 }
@@ -66,36 +65,37 @@ function startChessGame(roomCode) {
 
     room.state = "PLAYING";
     
-    // Assign Players
+    // Assign Players (P1 vs P2, or P1 vs Bot)
     const p1 = room.users[0];
-    const p2 = room.users[1]; // Might be undefined if solo
+    const p2 = room.users[1]; 
 
     room.gameData.fen = new Chess().fen();
     room.gameData.turn = 'w';
     room.gameData.history = [];
     
-    // Timers (Default 10 mins if not set)
+    // Timers (Default 10 mins)
     const t = room.settings.time || 600; 
     room.gameData.timers = { w: t, b: t };
 
-    // Setup Colors
+    // Setup Colors (Admin can invert in settings)
     if(room.settings.botMode) {
         room.gameData.players = { w: p1.id, b: 'BOT' };
     } else {
-        if(!p2) { // Fallback if no 2nd player
+        if(!p2) { 
+             // If solo but bot mode off, force bot mode
              room.gameData.players = { w: p1.id, b: 'BOT' };
              room.settings.botMode = true;
         } else {
-            // Respect Invert
             if(room.settings.invertColors) room.gameData.players = { w: p2.id, b: p1.id };
             else room.gameData.players = { w: p1.id, b: p2.id };
         }
     }
 
     io.to(roomCode).emit('update_room', getRoomState(room));
+    io.to(roomCode).emit('sys_msg', "Game Started! White to move.");
     io.to(roomCode).emit('sfx', 'start');
     
-    // Start Clock
+    // Start Chess Clock
     clearInterval(room.gameData.timerInterval);
     room.gameData.timerInterval = setInterval(() => {
         const turn = room.gameData.turn; 
@@ -131,7 +131,7 @@ function endChessGame(roomCode, winnerColor, reason) {
     io.to(roomCode).emit('game_over_alert', { 
         title: "GAME OVER",
         msg: winnerColor === 'draw' ? "Stalemate / Draw" : `${winnerName} Won! (${reason})`,
-        leaderboard: room.users // Update scores
+        leaderboard: room.users
     });
     io.to(roomCode).emit('update_room', getRoomState(room));
 }
@@ -164,7 +164,7 @@ function checkTTTWin(board, size) {
     return null;
 }
 
-// --- SCRIBBL LOGIC (UNCHANGED) ---
+// --- SCRIBBL LOGIC ---
 function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
@@ -184,9 +184,12 @@ function startScribbleTurn(roomCode) {
     room.gameData.word = null; room.gameData.guessed = []; room.gameData.history = []; room.gameData.redoStack = []; 
     io.to(roomCode).emit('clear_canvas'); 
     room.state = "SELECTING";
+    
     io.to(roomCode).emit('scribble_state', { state: "SELECTING", drawerId: drawer.id, drawerName: drawer.username, drawerAvatar: drawer.avatar, round: room.gameData.round, totalRounds: room.settings.rounds });
-    const options = getRandomWords(3, room.settings.customWords || []);
+    
+    const options = getRandomWords(3);
     io.to(drawer.id).emit('pick_word', { words: options });
+    
     let pickTime = 30;
     clearInterval(room.gameData.timer);
     io.to(roomCode).emit('pick_timer', pickTime);
@@ -198,9 +201,11 @@ function handleWordSelection(roomCode, word) {
     clearInterval(room.gameData.timer);
     room.gameData.word = word; room.state = "DRAWING";
     const masked = word.replace(/[a-zA-Z]/g, '_');
+    
     io.to(roomCode).emit('scribble_state', { state: "DRAWING", drawerId: room.gameData.drawerId, maskedWord: masked, time: room.settings.time, round: room.gameData.round, totalRounds: room.settings.rounds });
     io.to(room.gameData.drawerId).emit('drawer_secret', word);
     io.to(roomCode).emit('sfx', 'start'); 
+    
     let time = room.settings.time;
     room.gameData.timer = setInterval(() => {
         time--; io.to(roomCode).emit('timer_tick', time);
@@ -221,10 +226,12 @@ io.on('connection', (socket) => {
     socket.on('create_room', ({ username, avatar, gameType, settings }) => {
         const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
         const rSettings = { rounds: 3, time: 60, customWords: [], botMode: false, invertColors: false, gridSize: 3 };
+        
         let gd = {};
         if(gameType === 'scribble') gd = { round: 1, drawerIdx: 0, drawerId: null, word: null, history: [], redoStack: [], guessed: [] };
         else if (gameType === 'tictactoe') gd = { board: Array(9).fill(null), turn: 'X', round: 1 };
         else if (gameType === 'chess' && Chess) gd = { fen: new Chess().fen(), round: 1, turn: 'w', timers: {w:600, b:600}, players: {} };
+        
         rooms[roomCode] = { name: `${username}'s Room`, adminId: socket.id, users: [], gameType, settings: rSettings, gameData: gd, state: "LOBBY" };
         socket.emit('room_created', roomCode);
     });
@@ -233,17 +240,19 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if(!room) return socket.emit('error', "Room not found");
         if(room.users.length >= 10) return socket.emit('error', "Room Full");
+        
         const existing = room.users.find(u => u.id === socket.id);
         if(!existing) {
             const av = avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${username}`;
             room.users.push({ id: socket.id, username, avatar: av, score: 0 });
             socket.join(roomCode);
         }
+        
         io.to(roomCode).emit('update_room', getRoomState(room));
         io.to(roomCode).emit('sys_msg', `${username} joined.`);
         socket.emit('sfx', 'join');
         
-        // Late Join Sync for Scribble
+        // Late Join Sync
         if(room.gameType === 'scribble' && room.state === 'DRAWING') {
             socket.emit('canvas_history', room.gameData.history);
             socket.emit('scribble_state', { state: "DRAWING", drawerId: room.gameData.drawerId, maskedWord: room.gameData.word.replace(/[a-zA-Z]/g, '_'), time: room.settings.time, round: room.gameData.round, totalRounds: room.settings.rounds });
@@ -255,9 +264,10 @@ io.on('connection', (socket) => {
         if(room && room.adminId === socket.id) {
             if(settings) {
                 room.settings = { ...room.settings, ...settings };
-                room.settings.rounds = parseInt(settings.rounds);
-                room.settings.time = parseInt(settings.time);
-                room.settings.gridSize = parseInt(settings.gridSize);
+                // Safe parsing
+                room.settings.rounds = parseInt(settings.rounds) || 3;
+                room.settings.time = parseInt(settings.time) || 60;
+                room.settings.gridSize = parseInt(settings.gridSize) || 3;
             }
 
             if(room.gameType === 'scribble') {
@@ -271,6 +281,7 @@ io.on('connection', (socket) => {
                 room.gameData.board = Array(s*s).fill(null);
                 room.gameData.turn = 'X';
                 io.to(roomCode).emit('update_room', getRoomState(room));
+                io.to(roomCode).emit('sys_msg', "Game Started!");
             }
         }
     });
@@ -282,7 +293,7 @@ io.on('connection', (socket) => {
         const turnColor = room.gameData.turn;
         const authId = room.gameData.players[turnColor];
         
-        // Validation: Only current player or Bot's controller (Admin)
+        // Only active player or Admin (if controlling Bot) can move
         if(socket.id !== authId && authId !== 'BOT') return;
 
         const c = new Chess(room.gameData.fen);
@@ -299,10 +310,8 @@ io.on('connection', (socket) => {
                     if(c.isCheckmate()) { r="Checkmate"; w=turnColor; }
                     endChessGame(roomCode, w, r);
                 } else {
-                    // Bot Move Trigger?
+                    // Bot Random Move Logic
                     if(room.gameData.players[c.turn()] === 'BOT') {
-                        // Delay handled on client or simple timeout here?
-                        // Let's do simple timeout random move on server for stability
                         setTimeout(() => {
                            const moves = c.moves();
                            const randMove = moves[Math.floor(Math.random() * moves.length)];
@@ -314,7 +323,7 @@ io.on('connection', (socket) => {
                                io.to(roomCode).emit('sfx', 'pop');
                                if(c.isGameOver()) endChessGame(roomCode, c.turn()==='w'?'b':'w', "Bot Won");
                            }
-                        }, 1000);
+                        }, 1000); // 1 sec delay for realism
                     }
                 }
             }
@@ -325,11 +334,9 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if(!room || room.gameType!=='tictactoe') return;
         
-        // Players
         const p1 = room.users[0];
-        const p2 = room.users[1]; // or undefined
+        const p2 = room.users[1];
 
-        // Turn Check
         if(room.gameData.turn === 'X' && socket.id !== p1.id) return;
         if(room.gameData.turn === 'O' && (!p2 || socket.id !== p2.id)) return;
         if(room.gameData.board[index] !== null) return;
@@ -361,16 +368,14 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // Chess Restriction
+        // Chess Players can't chat
         if(room.gameType === 'chess' && room.state === 'PLAYING') {
              const isP = Object.values(room.gameData.players).includes(socket.id);
-             if(isP) return; // Player cannot chat
+             if(isP) return;
         }
         
-        // Scribble Logic (Same as before)
+        // Scribble Guess
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id !== room.gameData.drawerId) {
-            // ... (Your previous scribble logic) ...
-            // Re-adding brief version for integrity
             if(text.trim().toLowerCase() === room.gameData.word.toLowerCase()) {
                 if(!room.gameData.guessed.includes(socket.id)) {
                     room.gameData.guessed.push(socket.id); user.score+=100;
@@ -385,15 +390,13 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('sfx', 'msg');
     });
 
-    // Drawing & Utils
     socket.on('draw_op', d => socket.to(d.roomCode).emit('draw_op', d));
     socket.on('clear', d => { if(rooms[d.roomCode]) io.to(d.roomCode).emit('clear_canvas'); });
-    socket.on('undo', d => { if(rooms[d.roomCode]) io.to(d.roomCode).emit('undo'); }); // Simplified for brevity
+    socket.on('undo', d => { if(rooms[d.roomCode]) io.to(d.roomCode).emit('undo'); }); 
     socket.on('word_select', d => handleWordSelection(d.roomCode, d.word));
     socket.on('send_reaction', d => io.to(d.roomCode).emit('show_reaction', d));
     
     socket.on('disconnect', () => {
-         // Same disconnect logic
          for(const c in rooms) {
              const r = rooms[c];
              const i = r.users.findIndex(u=>u.id===socket.id);
