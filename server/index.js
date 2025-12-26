@@ -37,7 +37,6 @@ function getRandomWords(count, customWords = []) {
     return pool.sort(() => 0.5 - Math.random()).slice(0, count);
 }
 
-// Levenshtein Distance for "Close Call"
 function getEditDistance(a, b) {
     if(a.length === 0) return b.length; 
     if(b.length === 0) return a.length; 
@@ -57,6 +56,7 @@ function getEditDistance(a, b) {
 }
 
 function getRoomState(room) {
+    if(!room) return null;
     return {
         roomName: room.name,
         users: room.users,
@@ -82,7 +82,6 @@ function startChessGame(roomCode) {
 
     const p1 = room.users[0]; 
     const p2 = room.users[1]; 
-
     let adminColor = room.settings.startColor === 'black' ? 'b' : 'w';
     let oppColor = adminColor === 'w' ? 'b' : 'w';
 
@@ -107,6 +106,7 @@ function startChessGame(roomCode) {
 
 function endChessGame(roomCode, winnerColor, reason) {
     const room = rooms[roomCode];
+    if(!room) return;
     clearInterval(room.gameData.timerInterval);
     room.state = "GAME_OVER";
     
@@ -164,7 +164,6 @@ function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Check Limits
     if (room.gameData.round > room.settings.rounds) {
         room.state = "GAME_OVER";
         io.to(roomCode).emit('game_over_alert', { 
@@ -221,7 +220,6 @@ function handleWordSelection(roomCode, word) {
     room.gameData.word = word; 
     room.state = "DRAWING";
     
-    // Initial Mask (All Underscores)
     let masked = word.replace(/[a-zA-Z]/g, '_');
     
     io.to(roomCode).emit('scribble_state', { 
@@ -237,10 +235,8 @@ function handleWordSelection(roomCode, word) {
     let time = room.settings.time;
     io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-    // Hint Logic indices
     let hintIndices = [];
     if(word.length > 3) {
-        // Reveal 2 letters over time
         while(hintIndices.length < 2) {
             let r = Math.floor(Math.random() * word.length);
             if(hintIndices.indexOf(r) === -1) hintIndices.push(r);
@@ -251,7 +247,6 @@ function handleWordSelection(roomCode, word) {
         time--; 
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // Reveal Hints
         if(time === Math.floor(room.settings.time * 0.75) && hintIndices.length > 0) {
             let idx = hintIndices[0];
             let chars = masked.split(''); chars[idx] = word[idx]; masked = chars.join('');
@@ -272,6 +267,7 @@ function handleWordSelection(roomCode, word) {
 
 function endScribbleTurn(roomCode, reason) {
     const room = rooms[roomCode]; 
+    if(!room) return;
     clearInterval(room.gameData.timerInterval);
     
     const lb = room.users.map(u => ({ 
@@ -290,24 +286,22 @@ function endScribbleTurn(roomCode, reason) {
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 5000); // 5s break to show result
+    }, 5000);
 }
 
 // --- SOCKETS ---
 io.on('connection', (socket) => {
     socket.on('create_room', ({ username, avatar, gameType }) => {
-        // Simulate Loading Time for UI
-        setTimeout(() => {
-            const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-            const rSettings = { rounds: 3, time: 60, customWords: [], botMode: false, maxScore: 10000 };
-            let gd = {};
-            if(gameType === 'scribble') gd = { round: 1, drawerIdx: 0, drawerId: null, word: null, history: [], redoStack: [], guessed: [] };
-            else if (gameType === 'tictactoe') gd = { board: Array(9).fill(null), turn: 'X' };
-            else if (gameType === 'chess') gd = { fen: new Chess().fen() };
-            
-            rooms[roomCode] = { name: `${username}'s Room`, adminId: socket.id, users: [], gameType, settings: rSettings, gameData: gd, state: "LOBBY" };
-            socket.emit('room_created', roomCode);
-        }, 1500); // 1.5s delay for loading effect
+        // Real-time creation - no artificial delay here, client handles waiting for response
+        const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+        const rSettings = { rounds: 3, time: 60, customWords: [], botMode: false, maxScore: 10000 };
+        let gd = {};
+        if(gameType === 'scribble') gd = { round: 1, drawerIdx: 0, drawerId: null, word: null, history: [], redoStack: [], guessed: [] };
+        else if (gameType === 'tictactoe') gd = { board: Array(9).fill(null), turn: 'X' };
+        else if (gameType === 'chess') gd = { fen: new Chess().fen() };
+        
+        rooms[roomCode] = { name: `${username}'s Room`, adminId: socket.id, users: [], gameType, settings: rSettings, gameData: gd, state: "LOBBY" };
+        socket.emit('room_created', roomCode);
     });
 
     socket.on('join_room', ({ roomCode, username, avatar }) => {
@@ -323,7 +317,7 @@ io.on('connection', (socket) => {
         // Late join sync
         if(room.gameType === 'scribble' && room.state === 'DRAWING') {
             socket.emit('canvas_history', room.gameData.history);
-            let masked = room.gameData.word.replace(/[a-zA-Z]/g, '_'); // Simplified mask for late joiner
+            let masked = room.gameData.word.replace(/[a-zA-Z]/g, '_'); 
             socket.emit('scribble_state', { 
                 state: "DRAWING", drawerId: room.gameData.drawerId, maskedWord: masked, 
                 round: room.gameData.round, totalRounds: room.settings.rounds 
@@ -446,8 +440,7 @@ io.on('connection', (socket) => {
         
         // Scribble Logic
         if(room.gameType === 'scribble' && room.state === 'DRAWING') {
-            // Prevent Drawer from chatting
-            if(socket.id === room.gameData.drawerId) return;
+            if(socket.id === room.gameData.drawerId) return; // Prevent drawer chat
 
             const actual = room.gameData.word.toLowerCase();
             const guess = text.trim().toLowerCase();
@@ -455,9 +448,9 @@ io.on('connection', (socket) => {
             if(guess === actual) {
                 if(!room.gameData.guessed.includes(socket.id)) {
                     room.gameData.guessed.push(socket.id); 
-                    user.score += 100; // Guesser points
+                    user.score += 100;
                     const dr = room.users.find(u=>u.id===room.gameData.drawerId);
-                    if(dr) dr.score += 20; // Drawer bonus
+                    if(dr) dr.score += 20;
 
                     io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed the word!`);
                     io.to(roomCode).emit('sfx', 'success');
@@ -466,7 +459,6 @@ io.on('connection', (socket) => {
                 }
                 return;
             } else {
-                // Close Call Logic
                 const dist = getEditDistance(guess, actual);
                 if(dist <= 2 && actual.length > 3) {
                      socket.emit('sys_msg', `🔥 '${text}' is very close!`);
