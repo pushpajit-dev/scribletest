@@ -10,6 +10,27 @@ try {
     Chess = chessLib.Chess || chessLib;
 } catch (e) { console.log("Chess.js not found. Run: npm install chess.js"); }
 
+// --- HELPER: Levenshtein Distance for "Close" guesses ---
+function getEditDistance(a, b) {
+    if(a.length === 0) return b.length; 
+    if(b.length === 0) return a.length;
+    var matrix = [];
+    var i;
+    for(i = 0; i <= b.length; i++){ matrix[i] = [i]; }
+    var j;
+    for(j = 0; j <= a.length; j++){ matrix[0][j] = j; }
+    for(i = 1; i <= b.length; i++){
+        for(j = 1; j <= a.length; j++){
+            if(b.charAt(i-1) == a.charAt(j-1)){
+                matrix[i][j] = matrix[i-1][j-1];
+            } else {
+                matrix[i][j] = Math.min(matrix[i-1][j-1] + 1, Math.min(matrix[i][j-1] + 1, matrix[i-1][j] + 1));
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
 // --- WORD LIST ---
 const wordList = [
     "airplane", "alarm", "alien", "angel", "ant", "apple", "arm", "artist", 
@@ -199,7 +220,6 @@ function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Game Over Check
     if (room.gameData.round > room.settings.rounds) {
         room.state = "GAME_OVER";
         io.to(roomCode).emit('game_over_alert', { 
@@ -212,7 +232,6 @@ function startScribbleTurn(roomCode) {
         return;
     }
 
-    // Cycle Drawer
     if (room.gameData.drawerIdx >= room.users.length) {
         room.gameData.drawerIdx = 0; 
         room.gameData.round++;
@@ -232,10 +251,11 @@ function startScribbleTurn(roomCode) {
     room.gameData.guessed = []; 
     room.gameData.history = []; 
     room.gameData.redoStack = []; 
+    room.gameData.revealedIndices = new Set(); // For hints
     
     io.to(roomCode).emit('clear_canvas'); 
     
-    // IMPORTANT: Change state and UPDATE ROOM so clients hide the "Waiting" screen
+    // Update state to remove "Waiting" screen
     room.state = "SELECTING";
     io.to(roomCode).emit('update_room', getRoomState(room));
     
@@ -270,12 +290,12 @@ function handleWordSelection(roomCode, word) {
     
     room.gameData.word = word; 
     room.state = "DRAWING";
+    room.gameData.revealedIndices = new Set();
     
-    // IMPORTANT: Update room state again so late joiners or UI syncs correctly
+    // Initial Mask (e.g. "_ _ _ _ _")
+    const masked = word.split('').map(c => c === ' ' ? ' ' : '_').join(' ');
+    
     io.to(roomCode).emit('update_room', getRoomState(room));
-    
-    const masked = word.replace(/[a-zA-Z]/g, '_');
-    
     io.to(roomCode).emit('scribble_state', { 
         state: "DRAWING", 
         drawerId: room.gameData.drawerId, 
@@ -291,16 +311,26 @@ function handleWordSelection(roomCode, word) {
     io.to(roomCode).emit('sfx', 'start'); 
     
     let time = room.settings.time;
+    let revealCounter = 0;
     io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
     room.gameData.timerInterval = setInterval(() => {
         time--; 
+        revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        if(time === Math.floor(room.settings.time/2)) {
-            const hintIdx = Math.floor(Math.random() * word.length);
-            const hint = Array.from(word).map((c,i) => i===hintIdx ? c : '_').join('');
-            io.to(roomCode).emit('sys_msg', `💡 HINT: ${hint}`);
+        // Gradual Reveal: Reveal a random letter every 10 seconds approx
+        if(revealCounter % 10 === 0 && time > 10) {
+             const unrevealed = [];
+             for(let i=0; i<word.length; i++) { 
+                 if(word[i]!==' ' && !room.gameData.revealedIndices.has(i)) unrevealed.push(i); 
+             }
+             if(unrevealed.length > 0) {
+                 const idxToReveal = unrevealed[Math.floor(Math.random() * unrevealed.length)];
+                 room.gameData.revealedIndices.add(idxToReveal);
+                 const newMasked = word.split('').map((c,i) => (room.gameData.revealedIndices.has(i) || c===' ') ? c : '_').join(' ');
+                 io.to(roomCode).emit('word_hint_update', newMasked);
+             }
         }
 
         if(time <= 0) { 
@@ -328,10 +358,11 @@ function endScribbleTurn(roomCode, reason) {
         leaderboard: lb 
     });
     
+    // Longer cooldown to show leaderboard
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 5000);
+    }, 6000);
 }
 
 // --- SOCKETS ---
@@ -374,12 +405,14 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('sys_msg', `${username} joined.`);
         socket.emit('sfx', 'join');
         
-        if(room.gameType === 'scribble' && (room.state === 'DRAWING' || room.state === 'SELECTING')) {
+        // Late Join Sync Scribble
+        if(room.gameType === 'scribble' && room.state === 'DRAWING') {
             socket.emit('canvas_history', room.gameData.history);
+            const masked = room.gameData.word.split('').map((c,i) => (room.gameData.revealedIndices.has(i) || c===' ') ? c : '_').join(' ');
             socket.emit('scribble_state', { 
-                state: room.state, 
+                state: "DRAWING", 
                 drawerId: room.gameData.drawerId, 
-                maskedWord: room.gameData.word ? room.gameData.word.replace(/[a-zA-Z]/g, '_') : "", 
+                maskedWord: masked, 
                 time: room.settings.time, 
                 round: room.gameData.round, 
                 totalRounds: room.settings.rounds 
@@ -488,26 +521,38 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- CHAT & GUESSING (Updated with Scoring & Close Guess) ---
     socket.on('chat_send', ({ roomCode, text }) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id !== room.gameData.drawerId) {
-            if(text.trim().toLowerCase() === room.gameData.word.toLowerCase()) {
+            const guess = text.trim().toLowerCase();
+            const actual = room.gameData.word.toLowerCase();
+
+            if(guess === actual) {
                 if(!room.gameData.guessed.includes(socket.id)) {
                     room.gameData.guessed.push(socket.id); 
-                    user.score+=100;
+                    
+                    // Time-based scoring
+                    const timeBonus = Math.ceil((room.settings.time - (room.settings.time - room.gameData.timerInterval?._idleStart/1000 || 0)) * 2);
+                    user.score += (100 + timeBonus);
+                    
                     const drawer = room.users.find(u=>u.id===room.gameData.drawerId);
-                    if(drawer) drawer.score+=20;
+                    if(drawer) drawer.score+=30;
 
-                    io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed!`);
+                    io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
                     io.to(roomCode).emit('update_room', getRoomState(room));
                     if(room.gameData.guessed.length >= room.users.length-1) endScribbleTurn(roomCode, "All Guessed!");
                 }
                 return;
+            } else if (getEditDistance(guess, actual) <= 2 && guess.length > 3) {
+                 // Close guess feedback (Private)
+                 socket.emit('chat_receive', { username: "System", text: `'${text}' is close!`, type: 'close' });
+                 return; 
             }
         }
-        io.to(roomCode).emit('chat_receive', { username: user.username, text, avatar: user.avatar });
+        io.to(roomCode).emit('chat_receive', { username: user.username, text, avatar: user.avatar, type: 'chat' });
         io.to(roomCode).emit('sfx', 'msg');
     });
 
