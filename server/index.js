@@ -248,7 +248,6 @@ function startScribbleTurn(roomCode) {
         return;
     }
 
-    // Reset Turn Data
     room.gameData.drawerId = drawer.id;
     room.gameData.word = null; 
     room.gameData.guessed = []; 
@@ -262,6 +261,7 @@ function startScribbleTurn(roomCode) {
     room.state = "SELECTING";
     io.to(roomCode).emit('update_room', getRoomState(room));
     
+    // 1. Notify everyone
     io.to(roomCode).emit('scribble_state', { 
         state: "SELECTING", 
         drawerId: drawer.id, 
@@ -271,10 +271,11 @@ function startScribbleTurn(roomCode) {
         totalRounds: room.settings.rounds 
     });
     
+    // 2. Send words SPECIFICALLY to drawer
     const options = getRandomWords(3, room.settings.customWords);
     io.to(drawer.id).emit('pick_word', { words: options });
     
-    // Timer for Selecting
+    // Timer
     let pickTime = 15;
     clearInterval(room.gameData.timerInterval);
     io.to(roomCode).emit('timer_sync', { total: pickTime, msg: "Picking..." }); 
@@ -323,8 +324,8 @@ function handleWordSelection(roomCode, word) {
         revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // Gradual Reveal: Reveal a random letter every 12 seconds
-        if(revealCounter % 12 === 0 && time > 10) {
+        // Gradual Reveal: Reveal a random letter every 10-12 seconds
+        if(revealCounter % 10 === 0 && time > 10) {
              const unrevealed = [];
              for(let i=0; i<word.length; i++) { 
                  if(word[i]!==' ' && !room.gameData.revealedIndices.has(i)) unrevealed.push(i); 
@@ -356,9 +357,9 @@ function endScribbleTurn(roomCode, reason) {
         guessed: room.gameData.guessed.includes(u.id) || u.id === room.gameData.drawerId 
     })).sort((a,b) => b.score - a.score);
     
-    io.to(roomCode).emit('game_over_alert', { 
-        title: "ROUND OVER", 
-        msg: reason, 
+    io.to(roomCode).emit('scribble_end_turn', { 
+        word: room.gameData.word, 
+        reason: reason, 
         leaderboard: lb 
     });
     
