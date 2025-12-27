@@ -226,21 +226,19 @@ function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Check Max Rounds
     if (room.gameData.round > room.settings.rounds) {
         room.state = "GAME_OVER";
         io.to(roomCode).emit('game_over_alert', { 
             title: "GAME OVER", 
             msg: "Final Standings!", 
             leaderboard: room.users.sort((a,b)=>b.score-a.score),
-            isFinal: true
+            isFinal: true 
         });
         room.state = "LOBBY";
         io.to(roomCode).emit('update_room', getRoomState(room));
         return;
     }
 
-    // Next Drawer Logic
     if (room.gameData.drawerIdx >= room.users.length) {
         room.gameData.drawerIdx = 0; 
         room.gameData.round++;
@@ -255,7 +253,6 @@ function startScribbleTurn(roomCode) {
         return;
     }
 
-    // Reset Turn Data
     room.gameData.drawerId = drawer.id;
     room.gameData.word = null; 
     room.gameData.guessed = []; 
@@ -286,7 +283,6 @@ function startScribbleTurn(roomCode) {
     const options = getRandomWords(3, room.settings.customWords);
     io.to(drawer.id).emit('pick_word', { words: options });
     
-    // Picking Timer
     let pickTime = 15;
     clearInterval(room.gameData.timerInterval);
     io.to(roomCode).emit('timer_sync', { total: pickTime, msg: "Picking..." }); 
@@ -341,7 +337,6 @@ function handleWordSelection(roomCode, word) {
         revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // INTELLIGENT HINT LOGIC
         let shouldReveal = false;
         
         if (time === 20 || (room.gameData.wrongGuesses > 8 && time > 20)) {
@@ -394,7 +389,7 @@ function handleWordSelection(roomCode, word) {
 function endScribbleTurn(roomCode, reason) {
     const room = rooms[roomCode]; 
     if(!room) return;
-    clearInterval(room.gameData.timerInterval); // FORCE STOP TIMER
+    clearInterval(room.gameData.timerInterval);
     
     const lb = room.users.sort((a,b) => b.score - a.score);
     const correctWord = room.gameData.word;
@@ -409,11 +404,10 @@ function endScribbleTurn(roomCode, reason) {
     
     io.to(roomCode).emit('sfx', 'round_end');
 
-    // 8 Seconds Delay for Leaderboard
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 8000); 
+    }, 5000); // 5 sec cooldown
 }
 
 // --- SOCKETS ---
@@ -577,7 +571,7 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // 1. Block drawer from chatting/guessing
+        // 1. Block drawer
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id === room.gameData.drawerId) {
             return; 
         }
@@ -601,22 +595,21 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('update_room', getRoomState(room));
                     io.to(roomCode).emit('sfx', 'success'); 
                     
-                    // FIX: End Round if ALL opponents have guessed
+                    // FIX: Immediate Round End if ALL opponents guessed
                     if(room.gameData.guessed.length >= room.users.length - 1) {
-                         clearInterval(room.gameData.timerInterval); // Stop timer immediately
+                         clearInterval(room.gameData.timerInterval); // Stop immediately
+                         io.to(roomCode).emit('sys_msg', "Everyone guessed! Ending round...");
                          
-                         // 2 SECOND DELAY BEFORE LEADERBOARD
+                         // Force end after short delay
                          setTimeout(() => {
                              endScribbleTurn(roomCode, "Everyone Guessed!");
-                         }, 2000);
+                         }, 1000);
                     }
                 }
                 return;
             } else if (getEditDistance(guess, actual) <= 2 && guess.length > 2) {
                  socket.emit('chat_receive', { username: "System", text: `'${text}' is close!`, type: 'close' });
                  return; 
-            } else {
-                room.gameData.wrongGuesses = (room.gameData.wrongGuesses || 0) + 1;
             }
         }
         io.to(roomCode).emit('chat_receive', { username: user.username, text, avatar: user.avatar, type: 'chat' });
