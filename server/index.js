@@ -231,7 +231,7 @@ function startScribbleTurn(roomCode) {
             title: "GAME OVER", 
             msg: "Final Standings!", 
             leaderboard: room.users.sort((a,b)=>b.score-a.score),
-            isFinal: true
+            isFinal: true 
         });
         room.state = "LOBBY";
         io.to(roomCode).emit('update_room', getRoomState(room));
@@ -253,6 +253,7 @@ function startScribbleTurn(roomCode) {
         return;
     }
 
+    // Reset Turn Data
     room.gameData.drawerId = drawer.id;
     room.gameData.word = null; 
     room.gameData.guessed = []; 
@@ -274,10 +275,11 @@ function startScribbleTurn(roomCode) {
         totalRounds: room.settings.rounds 
     });
     
-    // Fix for Word Picking
+    // Send words to drawer
     const options = getRandomWords(3, room.settings.customWords);
     io.to(drawer.id).emit('pick_word', { words: options });
     
+    // Picking Timer
     let pickTime = 15;
     clearInterval(room.gameData.timerInterval);
     io.to(roomCode).emit('timer_sync', { total: pickTime, msg: "Picking..." }); 
@@ -313,6 +315,7 @@ function handleWordSelection(roomCode, word) {
         totalRounds: room.settings.rounds 
     });
     
+    // Send Secret to Drawer
     io.to(room.gameData.drawerId).emit('drawer_secret', word);
     
     io.to(roomCode).emit('sys_msg', `🎨 ${room.users.find(u=>u.id===room.gameData.drawerId)?.username} is drawing!`);
@@ -327,8 +330,8 @@ function handleWordSelection(roomCode, word) {
         revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // FIX: Limit Hints to max 2 letters
-        if(revealCounter % 12 === 0 && time > 10 && room.gameData.revealedIndices.size < 2) {
+        // LIMIT HINTS: Only if less than 2 letters revealed
+        if(revealCounter % 15 === 0 && time > 10 && room.gameData.revealedIndices.size < 2) {
              const unrevealed = [];
              for(let i=0; i<word.length; i++) { 
                  if(word[i]!==' ' && !room.gameData.revealedIndices.has(i)) unrevealed.push(i); 
@@ -362,15 +365,17 @@ function endScribbleTurn(roomCode, reason) {
     
     const lb = room.users.sort((a,b) => b.score - a.score);
     const correctWord = room.gameData.word;
-    
-    // FIX: Send the full word now
+
+    // Send full word here
     io.to(roomCode).emit('game_over_alert', { 
         title: "ROUND OVER", 
         msg: reason,
         word: correctWord, 
-        leaderboard: lb 
+        leaderboard: lb,
+        isFinal: false
     });
     
+    // 6 Second Delay for Leaderboard
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
@@ -439,7 +444,6 @@ io.on('connection', (socket) => {
                 room.settings.rounds = parseInt(settings.rounds) || 3;
                 room.settings.time = parseInt(settings.time) || 60;
                 room.settings.maxScore = parseInt(settings.maxScore) || 10000;
-                // Settings might have bad customWords from frontend, cleaned up in getRandomWords but safer to clean here too if desired
             }
 
             if(room.gameType === 'scribble') {
@@ -537,14 +541,14 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // 1. Block drawer from chatting
+        // 1. BLOCK DRAWER
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id === room.gameData.drawerId) {
-            return;
+            return; // Drawer cannot guess or chat
         }
 
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id !== room.gameData.drawerId) {
             const guess = text.trim().toLowerCase();
-            const actual = room.gameData.word.toLowerCase();
+            const actual = room.gameData.word ? room.gameData.word.toLowerCase() : "";
 
             if(guess === actual) {
                 if(!room.gameData.guessed.includes(socket.id)) {
@@ -558,9 +562,11 @@ io.on('connection', (socket) => {
 
                     io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
                     io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed it!`);
+                    io.to(roomCode).emit('update_scores', room.users); 
                     io.to(roomCode).emit('update_room', getRoomState(room));
+                    io.to(roomCode).emit('sfx', 'pop');
                     
-                    // FIX: Check if everyone (except drawer) has guessed
+                    // FIX: End Round if ALL opponents guessed
                     if(room.gameData.guessed.length >= room.users.length - 1) {
                          endScribbleTurn(roomCode, "Everyone Guessed!");
                     }
