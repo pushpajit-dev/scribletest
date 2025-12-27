@@ -95,14 +95,14 @@ function getRoomState(room) {
         roundInfo: { 
             current: room.gameData?.round || 1, 
             total: room.settings?.rounds || 3,
-            turn: (room.gameData?.drawerIdx || 0) + 1, 
+            turn: (room.gameData?.drawerIdx || 0) + 1,
             totalTurns: room.users.length 
         },
         gameData: room.gameData
     };
 }
 
-// --- CHESS LOGIC (PRESERVED) ---
+// --- CHESS LOGIC ---
 function startChessGame(roomCode) {
     const room = rooms[roomCode];
     if(!room || !Chess) return;
@@ -173,7 +173,7 @@ function endChessGame(roomCode, winnerColor, reason) {
     io.to(roomCode).emit('update_room', getRoomState(room));
 }
 
-// --- TIC TAC TOE LOGIC (PRESERVED) ---
+// --- TIC TAC TOE LOGIC ---
 function startTTTGame(roomCode) {
     const room = rooms[roomCode];
     if(!room) return;
@@ -226,21 +226,19 @@ function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Check Max Rounds
     if (room.gameData.round > room.settings.rounds) {
         room.state = "GAME_OVER";
         io.to(roomCode).emit('game_over_alert', { 
             title: "GAME OVER", 
             msg: "Final Standings!", 
             leaderboard: room.users.sort((a,b)=>b.score-a.score),
-            isFinal: true
+            isFinal: true 
         });
         room.state = "LOBBY";
         io.to(roomCode).emit('update_room', getRoomState(room));
         return;
     }
 
-    // Next Drawer Logic
     if (room.gameData.drawerIdx >= room.users.length) {
         room.gameData.drawerIdx = 0; 
         room.gameData.round++;
@@ -255,7 +253,6 @@ function startScribbleTurn(roomCode) {
         return;
     }
 
-    // Reset Turn Data
     room.gameData.drawerId = drawer.id;
     room.gameData.word = null; 
     room.gameData.guessed = []; 
@@ -270,7 +267,7 @@ function startScribbleTurn(roomCode) {
     room.state = "SELECTING";
     io.to(roomCode).emit('update_room', getRoomState(room));
     
-    // FIX: Send turn info explicitly
+    // Explicit Turn Info
     io.to(roomCode).emit('scribble_state', { 
         state: "SELECTING", 
         drawerId: drawer.id, 
@@ -287,7 +284,6 @@ function startScribbleTurn(roomCode) {
     const options = getRandomWords(3, room.settings.customWords);
     io.to(drawer.id).emit('pick_word', { words: options });
     
-    // Picking Timer
     let pickTime = 15;
     clearInterval(room.gameData.timerInterval);
     io.to(roomCode).emit('timer_sync', { total: pickTime, msg: "Picking..." }); 
@@ -313,7 +309,6 @@ function handleWordSelection(roomCode, word) {
     
     io.to(roomCode).emit('update_room', getRoomState(room));
     
-    // FIX: Send turn info explicitly here too
     io.to(roomCode).emit('scribble_state', { 
         state: "DRAWING", 
         drawerId: room.gameData.drawerId, 
@@ -343,9 +338,7 @@ function handleWordSelection(roomCode, word) {
         revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // INTELLIGENT HINT LOGIC
         let shouldReveal = false;
-        
         if (time === 20 || (room.gameData.wrongGuesses > 8 && time > 20)) {
             if (room.gameData.hintsGiven < maxHints) shouldReveal = true;
         }
@@ -396,7 +389,7 @@ function handleWordSelection(roomCode, word) {
 function endScribbleTurn(roomCode, reason) {
     const room = rooms[roomCode]; 
     if(!room) return;
-    clearInterval(room.gameData.timerInterval);
+    clearInterval(room.gameData.timerInterval); // Stop Timer
     
     const lb = room.users.sort((a,b) => b.score - a.score);
     const correctWord = room.gameData.word;
@@ -411,11 +404,10 @@ function endScribbleTurn(roomCode, reason) {
     
     io.to(roomCode).emit('sfx', 'round_end');
 
-    // 8 Seconds Delay for Leaderboard
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 8000);
+    }, 8000); // 8 sec delay
 }
 
 // --- SOCKETS ---
@@ -577,14 +569,15 @@ io.on('connection', (socket) => {
 
     socket.on('chat_send', ({ roomCode, text }) => {
         const room = rooms[roomCode]; if(!room) return;
-        const user = room.users.find(u => u.id === socket.id);
         
-        // 1. Block drawer from chatting/guessing
+        // 1. Block drawer from chatting or guessing
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id === room.gameData.drawerId) {
-            return;
+            return; 
         }
 
-        if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id !== room.gameData.drawerId) {
+        const user = room.users.find(u => u.id === socket.id);
+        
+        if(room.gameType === 'scribble' && room.state === 'DRAWING') {
             const guess = text.trim().toLowerCase();
             const actual = room.gameData.word.toLowerCase();
 
@@ -603,11 +596,13 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('update_room', getRoomState(room));
                     io.to(roomCode).emit('sfx', 'success'); 
                     
-                    // FIX: End Round if ALL opponents guessed
+                    // FIX: End Round if ALL opponents have guessed
                     if(room.gameData.guessed.length >= room.users.length - 1) {
                          clearInterval(room.gameData.timerInterval); // Stop timer immediately
+                         // Notify clients immediately
+                         io.to(roomCode).emit('sys_msg', "Wait! Round ending...");
                          
-                         // 2 SECOND DELAY BEFORE LEADERBOARD (Requested)
+                         // 2 SECOND DELAY BEFORE LEADERBOARD
                          setTimeout(() => {
                              endScribbleTurn(roomCode, "Everyone Guessed!");
                          }, 2000);
