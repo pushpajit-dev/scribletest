@@ -64,11 +64,11 @@ const wordList = [
 ];
 
 const app = express();
-app.use(cors());
+app.use(cors()); // Allow all connections
 const server = http.createServer(app);
 
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: "*", methods: ["GET", "POST"] } // Critical for cross-platform
 });
 
 const rooms = {}; 
