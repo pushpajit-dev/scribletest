@@ -95,8 +95,8 @@ function getRoomState(room) {
         roundInfo: { 
             current: room.gameData?.round || 1, 
             total: room.settings?.rounds || 3,
-            turn: (room.gameData?.drawerIdx || 0) + 1, // Current Turn (1-based)
-            totalTurns: room.users.length // Total players = Total turns
+            turn: (room.gameData?.drawerIdx || 0) + 1,
+            totalTurns: room.users.length 
         },
         gameData: room.gameData
     };
@@ -221,7 +221,7 @@ function checkTTTWin(board) {
     return null;
 }
 
-// --- SCRIBBLE LOGIC (UPDATED) ---
+// --- SCRIBBLE LOGIC ---
 function startScribbleTurn(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
@@ -235,13 +235,12 @@ function startScribbleTurn(roomCode) {
             leaderboard: room.users.sort((a,b)=>b.score-a.score),
             isFinal: true
         });
-        io.to(roomCode).emit('sfx', 'game_end'); // Sound
         room.state = "LOBBY";
         io.to(roomCode).emit('update_room', getRoomState(room));
         return;
     }
 
-    // Check Turn Over (All players drawn for this round)
+    // Next Drawer Logic
     if (room.gameData.drawerIdx >= room.users.length) {
         room.gameData.drawerIdx = 0; 
         room.gameData.round++;
@@ -263,24 +262,27 @@ function startScribbleTurn(roomCode) {
     room.gameData.history = []; 
     room.gameData.redoStack = []; 
     room.gameData.revealedIndices = new Set();
-    room.gameData.hintsGiven = 0; // NEW: Track hints
-    room.gameData.wrongGuesses = 0; // NEW: Track wrong guesses
+    room.gameData.hintsGiven = 0; 
+    room.gameData.wrongGuesses = 0;
     
     io.to(roomCode).emit('clear_canvas'); 
     
     room.state = "SELECTING";
     io.to(roomCode).emit('update_room', getRoomState(room));
     
+    // Send TURN INFO here so ?/? is replaced
     io.to(roomCode).emit('scribble_state', { 
         state: "SELECTING", 
         drawerId: drawer.id, 
         drawerName: drawer.username, 
         drawerAvatar: drawer.avatar, 
         round: room.gameData.round, 
-        totalRounds: room.settings.rounds 
+        totalRounds: room.settings.rounds,
+        turn: room.gameData.drawerIdx + 1,
+        totalTurns: room.users.length
     });
     
-    io.to(roomCode).emit('sfx', 'picking'); // Sound
+    io.to(roomCode).emit('sfx', 'picking');
 
     const options = getRandomWords(3, room.settings.customWords);
     io.to(drawer.id).emit('pick_word', { words: options });
@@ -318,7 +320,9 @@ function handleWordSelection(roomCode, word) {
         wordLength: word.length,
         time: room.settings.time, 
         round: room.gameData.round, 
-        totalRounds: room.settings.rounds 
+        totalRounds: room.settings.rounds,
+        turn: room.gameData.drawerIdx + 1,
+        totalTurns: room.users.length
     });
     
     io.to(room.gameData.drawerId).emit('drawer_secret', word);
@@ -330,7 +334,6 @@ function handleWordSelection(roomCode, word) {
     let revealCounter = 0;
     io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-    // Determine Toughness
     const isTough = word.length >= 6;
     const maxHints = word.length <= 4 ? 1 : (word.length > 7 ? 3 : 2);
 
@@ -339,15 +342,12 @@ function handleWordSelection(roomCode, word) {
         revealCounter++;
         io.to(roomCode).emit('timer_sync', { total: time, msg: "Guess!" });
 
-        // --- INTELLIGENT HINT LOGIC ---
-        // Reveal if: (Time is 20s or 10s) AND (Hints not maxed)
+        // INTELLIGENT HINT LOGIC
         let shouldReveal = false;
         
-        // 15-20s mark (or if many wrong guesses)
         if (time === 20 || (room.gameData.wrongGuesses > 8 && time > 20)) {
             if (room.gameData.hintsGiven < maxHints) shouldReveal = true;
         }
-        // 10s mark
         if (time === 10) {
             if (room.gameData.hintsGiven < maxHints) shouldReveal = true;
         }
@@ -355,17 +355,14 @@ function handleWordSelection(roomCode, word) {
         if (shouldReveal && room.gameData.revealedIndices.size < word.length - 1) {
              let idxToReveal = -1;
              
-             // Tough word strategy: Reveal First letter first
              if(isTough && !room.gameData.revealedIndices.has(0)) {
                  idxToReveal = 0;
              } else {
-                 // Easy word or already revealed first: Random unrevealed
                  const unrevealed = [];
                  for(let i=0; i<word.length; i++) { 
                      if(word[i]!==' ' && !room.gameData.revealedIndices.has(i)) unrevealed.push(i); 
                  }
                  if(unrevealed.length > 0) {
-                     // Pick random
                      idxToReveal = unrevealed[Math.floor(Math.random() * unrevealed.length)];
                  }
              }
@@ -380,9 +377,11 @@ function handleWordSelection(roomCode, word) {
                      drawerId: room.gameData.drawerId,
                      maskedWord: newMasked,
                      round: room.gameData.round,
-                     totalRounds: room.settings.rounds
+                     totalRounds: room.settings.rounds,
+                     turn: room.gameData.drawerIdx + 1,
+                     totalTurns: room.users.length
                  });
-                 io.to(roomCode).emit('sfx', 'hint'); // Sound
+                 io.to(roomCode).emit('sfx', 'hint'); 
              }
         }
 
@@ -396,7 +395,7 @@ function handleWordSelection(roomCode, word) {
 function endScribbleTurn(roomCode, reason) {
     const room = rooms[roomCode]; 
     if(!room) return;
-    clearInterval(room.gameData.timerInterval);
+    clearInterval(room.gameData.timerInterval); // FORCE STOP TIMER
     
     const lb = room.users.sort((a,b) => b.score - a.score);
     const correctWord = room.gameData.word;
@@ -405,12 +404,13 @@ function endScribbleTurn(roomCode, reason) {
         title: "ROUND OVER", 
         msg: reason,
         word: correctWord, 
-        leaderboard: lb 
+        leaderboard: lb,
+        isFinal: false
     });
     
-    io.to(roomCode).emit('sfx', 'round_end'); // Sound
+    io.to(roomCode).emit('sfx', 'round_end');
 
-    // 8 Seconds Delay for Leaderboard (Requested)
+    // 8 Seconds Leaderboard (Requested)
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
@@ -466,7 +466,9 @@ io.on('connection', (socket) => {
                 maskedWord: masked, 
                 time: room.settings.time, 
                 round: room.gameData.round, 
-                totalRounds: room.settings.rounds 
+                totalRounds: room.settings.rounds,
+                turn: room.gameData.drawerIdx + 1,
+                totalTurns: room.users.length
             });
         }
     });
@@ -598,11 +600,15 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
                     io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed it!`);
                     io.to(roomCode).emit('update_room', getRoomState(room));
-                    io.to(roomCode).emit('sfx', 'success'); // Sound
+                    io.to(roomCode).emit('sfx', 'success'); 
                     
-                    // FIX: Check if everyone (except drawer) has guessed
+                    // FIX: End Round if ALL opponents guessed
                     if(room.gameData.guessed.length >= room.users.length - 1) {
-                         endScribbleTurn(roomCode, "Everyone Guessed!");
+                         clearInterval(room.gameData.timerInterval); // Stop timer immediately
+                         // 2 SECOND DELAY BEFORE LEADERBOARD
+                         setTimeout(() => {
+                             endScribbleTurn(roomCode, "Everyone Guessed!");
+                         }, 2000);
                     }
                 }
                 return;
