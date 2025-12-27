@@ -10,7 +10,7 @@ try {
     Chess = chessLib.Chess || chessLib;
 } catch (e) { console.log("Chess.js not found. Run: npm install chess.js"); }
 
-// --- ALGORITHM: Levenshtein Distance (For "Close" guesses) ---
+// --- ALGORITHM: Levenshtein Distance ---
 function getEditDistance(a, b) {
     if(a.length === 0) return b.length; 
     if(b.length === 0) return a.length;
@@ -102,7 +102,7 @@ function getRoomState(room) {
     };
 }
 
-// --- CHESS LOGIC (PRESERVED) ---
+// --- CHESS LOGIC ---
 function startChessGame(roomCode) {
     const room = rooms[roomCode];
     if(!room || !Chess) return;
@@ -173,7 +173,7 @@ function endChessGame(roomCode, winnerColor, reason) {
     io.to(roomCode).emit('update_room', getRoomState(room));
 }
 
-// --- TIC TAC TOE LOGIC (PRESERVED) ---
+// --- TIC TAC TOE LOGIC ---
 function startTTTGame(roomCode) {
     const room = rooms[roomCode];
     if(!room) return;
@@ -463,6 +463,10 @@ io.on('connection', (socket) => {
                 turn: room.gameData.drawerIdx + 1,
                 totalTurns: room.users.length
             });
+            // If they already guessed, reveal it
+             if(room.gameData.guessed.includes(socket.id)) {
+                 socket.emit('reveal_word', { word: room.gameData.word });
+             }
         }
     });
 
@@ -590,17 +594,20 @@ io.on('connection', (socket) => {
                     const drawer = room.users.find(u=>u.id===room.gameData.drawerId);
                     if(drawer) drawer.score+=30;
 
+                    // FIX: Reveal word to THIS user specifically
+                    socket.emit('reveal_word', { word: room.gameData.word });
+                    
                     io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
                     io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed it!`);
                     io.to(roomCode).emit('update_room', getRoomState(room));
                     io.to(roomCode).emit('sfx', 'success'); 
                     
-                    // FIX: Immediate Round End if ALL opponents guessed
-                    if(room.gameData.guessed.length >= room.users.length - 1) {
+                    // FIX: Check ALL active non-drawer users
+                    const totalGuessers = room.users.length - 1;
+                    if(room.gameData.guessed.length >= totalGuessers) {
                          clearInterval(room.gameData.timerInterval); // Stop immediately
                          io.to(roomCode).emit('sys_msg', "Everyone guessed! Ending round...");
                          
-                         // Force end after short delay
                          setTimeout(() => {
                              endScribbleTurn(roomCode, "Everyone Guessed!");
                          }, 1000);
