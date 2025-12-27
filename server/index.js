@@ -248,6 +248,7 @@ function startScribbleTurn(roomCode) {
 
     const drawer = room.users[room.gameData.drawerIdx];
     if(!drawer) {
+        // If drawer left, skip
         room.gameData.drawerIdx++;
         startScribbleTurn(roomCode);
         return;
@@ -596,12 +597,15 @@ io.on('connection', (socket) => {
                     
                     io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
                     io.to(roomCode).emit('sys_msg', `🎉 ${user.username} guessed it!`);
-                    io.to(roomCode).emit('update_room', getRoomState(room));
+                    
+                    // Send specific user update for leaderboard color change
+                    io.to(roomCode).emit('player_guessed_correct', { userId: socket.id });
+                    
                     io.to(roomCode).emit('sfx', 'success'); 
                     
+                    // Check if everyone guessed (minus drawer)
                     const totalGuessers = room.users.length - 1;
                     if(room.gameData.guessed.length >= totalGuessers) {
-                         // Force stop the timer immediately to prevent "stuck" feeling
                          clearInterval(room.gameData.timerInterval); 
                          io.to(roomCode).emit('sys_msg', "Everyone guessed! Ending round...");
                          
@@ -660,7 +664,19 @@ io.on('connection', (socket) => {
              if(i!==-1){
                  r.users.splice(i,1); io.to(c).emit('sys_msg', "User left.");
                  if(r.users.length===0) delete rooms[c];
-                 else { if(r.adminId===socket.id) r.adminId=r.users[0].id; io.to(c).emit('update_room', getRoomState(r)); }
+                 else { 
+                     // Handle dynamic disconnection ending round
+                     if(r.gameType === 'scribble' && r.state === 'DRAWING') {
+                         const totalGuessers = r.users.length - 1;
+                         if(r.gameData.guessed.length >= totalGuessers && totalGuessers > 0) {
+                             clearInterval(r.gameData.timerInterval);
+                             endScribbleTurn(c, "Everyone Guessed!");
+                         }
+                     }
+                     
+                     if(r.adminId===socket.id) r.adminId=r.users[0].id; 
+                     io.to(c).emit('update_room', getRoomState(r)); 
+                 }
                  break;
              }
          }
