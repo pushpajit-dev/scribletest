@@ -601,6 +601,7 @@ io.on('connection', (socket) => {
                     
                     const totalGuessers = room.users.length - 1;
                     if(room.gameData.guessed.length >= totalGuessers) {
+                         // Force stop the timer immediately to prevent "stuck" feeling
                          clearInterval(room.gameData.timerInterval); 
                          io.to(roomCode).emit('sys_msg', "Everyone guessed! Ending round...");
                          
