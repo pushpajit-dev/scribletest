@@ -95,7 +95,7 @@ function getRoomState(room) {
         roundInfo: { 
             current: room.gameData?.round || 1, 
             total: room.settings?.rounds || 3,
-            turn: (room.gameData?.drawerIdx || 0) + 1,
+            turn: (room.gameData?.drawerIdx || 0) + 1, 
             totalTurns: room.users.length 
         },
         gameData: room.gameData
@@ -270,7 +270,7 @@ function startScribbleTurn(roomCode) {
     room.state = "SELECTING";
     io.to(roomCode).emit('update_room', getRoomState(room));
     
-    // Send TURN INFO here so ?/? is replaced
+    // FIX: Send turn info explicitly
     io.to(roomCode).emit('scribble_state', { 
         state: "SELECTING", 
         drawerId: drawer.id, 
@@ -313,6 +313,7 @@ function handleWordSelection(roomCode, word) {
     
     io.to(roomCode).emit('update_room', getRoomState(room));
     
+    // FIX: Send turn info explicitly here too
     io.to(roomCode).emit('scribble_state', { 
         state: "DRAWING", 
         drawerId: room.gameData.drawerId, 
@@ -395,7 +396,7 @@ function handleWordSelection(roomCode, word) {
 function endScribbleTurn(roomCode, reason) {
     const room = rooms[roomCode]; 
     if(!room) return;
-    clearInterval(room.gameData.timerInterval); // FORCE STOP TIMER
+    clearInterval(room.gameData.timerInterval);
     
     const lb = room.users.sort((a,b) => b.score - a.score);
     const correctWord = room.gameData.word;
@@ -410,7 +411,7 @@ function endScribbleTurn(roomCode, reason) {
     
     io.to(roomCode).emit('sfx', 'round_end');
 
-    // 8 Seconds Leaderboard (Requested)
+    // 8 Seconds Delay for Leaderboard
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
@@ -578,7 +579,7 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // 1. Block drawer from chatting
+        // 1. Block drawer from chatting/guessing
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id === room.gameData.drawerId) {
             return;
         }
@@ -605,7 +606,8 @@ io.on('connection', (socket) => {
                     // FIX: End Round if ALL opponents guessed
                     if(room.gameData.guessed.length >= room.users.length - 1) {
                          clearInterval(room.gameData.timerInterval); // Stop timer immediately
-                         // 2 SECOND DELAY BEFORE LEADERBOARD
+                         
+                         // 2 SECOND DELAY BEFORE LEADERBOARD (Requested)
                          setTimeout(() => {
                              endScribbleTurn(roomCode, "Everyone Guessed!");
                          }, 2000);
