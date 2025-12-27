@@ -463,7 +463,6 @@ io.on('connection', (socket) => {
                 turn: room.gameData.drawerIdx + 1,
                 totalTurns: room.users.length
             });
-            // If they already guessed, reveal it
              if(room.gameData.guessed.includes(socket.id)) {
                  socket.emit('reveal_word', { word: room.gameData.word });
              }
@@ -575,7 +574,6 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode]; if(!room) return;
         const user = room.users.find(u => u.id === socket.id);
         
-        // 1. Block drawer
         if(room.gameType === 'scribble' && room.state === 'DRAWING' && socket.id === room.gameData.drawerId) {
             return; 
         }
@@ -594,7 +592,6 @@ io.on('connection', (socket) => {
                     const drawer = room.users.find(u=>u.id===room.gameData.drawerId);
                     if(drawer) drawer.score+=30;
 
-                    // FIX: Reveal word to THIS user specifically
                     socket.emit('reveal_word', { word: room.gameData.word });
                     
                     io.to(roomCode).emit('chat_receive', { username: user.username, text: "Guessed the word!", type: 'correct', avatar: user.avatar });
@@ -602,10 +599,9 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('update_room', getRoomState(room));
                     io.to(roomCode).emit('sfx', 'success'); 
                     
-                    // FIX: Check ALL active non-drawer users
                     const totalGuessers = room.users.length - 1;
                     if(room.gameData.guessed.length >= totalGuessers) {
-                         clearInterval(room.gameData.timerInterval); // Stop immediately
+                         clearInterval(room.gameData.timerInterval); 
                          io.to(roomCode).emit('sys_msg', "Everyone guessed! Ending round...");
                          
                          setTimeout(() => {
