@@ -67,7 +67,7 @@ const app = express();
 app.use(cors());
 const server = http.createServer(app);
 
-// Keep loose config for mobile
+// --- SOCKET CONFIG ---
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
     pingTimeout: 60000, 
@@ -86,12 +86,11 @@ function getRandomWords(count, customWords = []) {
     return pool.sort(() => 0.5 - Math.random()).slice(0, count);
 }
 
-// *** CRITICAL FIX: STRIP INTERVAL FROM DATA ***
+// *** CRITICAL FIX: SANITIZE DATA BEFORE SENDING ***
 function getRoomState(room) {
-    // Create a copy of gameData to modify
-    const safeGameData = { ...room.gameData };
-    // Remove the timerInterval object because it causes Circular JSON / Maximum Stack errors
-    delete safeGameData.timerInterval; 
+    const safeData = { ...room.gameData };
+    // DELETE THE INTERVAL OBJECT TO PREVENT CRASH
+    delete safeData.timerInterval; 
 
     return {
         roomName: room.name,
@@ -107,7 +106,7 @@ function getRoomState(room) {
             turn: (room.gameData?.drawerIdx || 0) + 1,
             totalTurns: room.users.length 
         },
-        gameData: safeGameData // Send the safe version
+        gameData: safeData 
     };
 }
 
@@ -257,7 +256,6 @@ function startScribbleTurn(roomCode) {
 
     const drawer = room.users[room.gameData.drawerIdx];
     if(!drawer) {
-        // If drawer left, skip
         room.gameData.drawerIdx++;
         startScribbleTurn(roomCode);
         return;
@@ -417,7 +415,7 @@ function endScribbleTurn(roomCode, reason) {
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 5000); 
+    }, 5000); // 5 sec cooldown
 }
 
 // --- SOCKETS ---
