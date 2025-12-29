@@ -67,10 +67,10 @@ const app = express();
 app.use(cors()); // Allow all connections
 const server = http.createServer(app);
 
-// --- UPDATED SOCKET CONFIG FOR STABILITY ---
+// --- SOCKET CONFIG OPTIMIZED FOR MOBILE & RENDER ---
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
-    pingTimeout: 60000, // Wait 60s before declaring mobile user disconnected (helps 4G lag)
+    pingTimeout: 60000, // Waits 60s before disconnecting lagging mobile users
     pingInterval: 25000 
 });
 
@@ -411,7 +411,7 @@ function endScribbleTurn(roomCode, reason) {
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 5000); 
+    }, 5000); // 5 sec cooldown
 }
 
 // --- SOCKETS ---
