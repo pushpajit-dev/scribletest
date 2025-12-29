@@ -67,8 +67,11 @@ const app = express();
 app.use(cors()); // Allow all connections
 const server = http.createServer(app);
 
+// --- UPDATED SOCKET CONFIG FOR STABILITY ---
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] } // Critical for cross-platform
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    pingTimeout: 60000, // Wait 60s before declaring mobile user disconnected (helps 4G lag)
+    pingInterval: 25000 
 });
 
 const rooms = {}; 
@@ -408,7 +411,7 @@ function endScribbleTurn(roomCode, reason) {
     setTimeout(() => { 
         room.gameData.drawerIdx++; 
         startScribbleTurn(roomCode); 
-    }, 5000); // 5 sec cooldown
+    }, 5000); 
 }
 
 // --- SOCKETS ---
